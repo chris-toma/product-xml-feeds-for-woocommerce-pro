@@ -179,6 +179,76 @@ class Alg_WC_Product_XML_Feeds_Core {
 		}
 	}
 
+    function create_products_xml($file_num)
+    {
+        global $wpdb;
+        $sql = "
+            SELECT
+                p.ID,
+                p.post_title,
+                `post_content`,
+                t.name AS product_category,
+                t.term_id AS product_id,
+                tt.term_taxonomy_id AS tt_term_taxonomia,
+                tr.term_taxonomy_id AS tr_term_taxonomia,
+                MAX(CASE WHEN pm1.meta_key = '_price' then pm1.meta_value ELSE NULL END) as price,
+                MAX(CASE WHEN pm1.meta_key = '_regular_price' then pm1.meta_value ELSE NULL END) as regular_price,
+                MAX(CASE WHEN pm1.meta_key = '_sale_price' then pm1.meta_value ELSE NULL END) as sale_price,
+                MAX(CASE WHEN pm1.meta_key = '_sku' then pm1.meta_value ELSE NULL END) as sku,
+                MAX(CASE WHEN pm1.meta_key = '_stock' then pm1.meta_value ELSE NULL END) as stock,
+                am.meta_value as image
+            FROM wp_posts p
+                LEFT JOIN wp_postmeta pm1 ON pm1.post_id = p.ID
+                LEFT JOIN wp_term_relationships AS tr ON tr.object_id = p.ID
+                JOIN wp_term_taxonomy AS tt ON tt.taxonomy = 'product_cat' AND tt.term_taxonomy_id = tr.term_taxonomy_id
+                JOIN wp_terms AS t ON t.term_id = tt.term_id
+                LEFT JOIN wp_postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_thumbnail_id'
+                LEFT JOIN wp_postmeta am ON am.post_id = pm.meta_value AND am.meta_key = '_wp_attached_file'
+            WHERE p.post_type in('product', 'product_variation') AND p.post_status = 'publish'
+            GROUP BY p.ID;";
+
+        $start = microtime(true);
+        $a = $wpdb->get_results($sql);
+        $xml = "";
+        $xml .= '<?xml version = "1.0" encoding = "utf-8" ?>' . PHP_EOL .
+            '<root>' . PHP_EOL .
+            '<time>[alg_current_datetime]</time>' . PHP_EOL .
+            '<title><![CDATA[ Products Feed ]]></title>' . PHP_EOL;
+        foreach ($a as $row) {
+            $a = $wpdb->get_results("
+                    SELECT taxonomy, slug
+                    FROM
+                        wp_term_relationships
+                            JOIN wp_term_taxonomy wtt ON wp_term_relationships.term_taxonomy_id = wtt.term_taxonomy_id
+                            JOIN wp_terms wt ON wtt.term_id = wt.term_id
+                    WHERE object_id = {$row->ID}");
+            $f=[];
+            foreach ($a as $attr){
+                $f[] =$attr->taxonomy.":".$attr->slug;
+            }
+
+            print "<pre>";
+            $f = implode('|',$f);
+
+            $xml .= '<item>' . PHP_EOL .
+                "\t" . '<name>' . $row->post_title . '</name>' . PHP_EOL .
+                "\t" . '<short_description>' . htmlspecialchars($row->post_content) . '</short_description>' . PHP_EOL .
+                "\t" . '<price>' . $row->price . '</price>' . PHP_EOL .
+                "\t" . '<image_url>' .get_site_url()."/wp-content/uploads/". $row->image . '</image_url>' . PHP_EOL .
+                "\t" . '<sku>' . $row->sku . '</sku>' . PHP_EOL .
+                "\t" . '<stock_quantity>' . $row->stock . '</stock_quantity>' . PHP_EOL .
+                "\t" . '<categories>' . $row->product_category . '</categories>' . PHP_EOL .
+                "\t" . '<attributes>' . $f . '</attributes>' . PHP_EOL .
+                '</item>' . PHP_EOL;
+
+        }
+        $end = microtime(true);
+        $xml .= '</root>' . $start . " " . $end;
+
+        file_put_contents('products.xml', $xml);
+        print $end - $start . PHP_EOL;
+        die();
+    }
 	/**
 	 * create_products_xml.
 	 *
@@ -195,351 +265,351 @@ class Alg_WC_Product_XML_Feeds_Core {
 	 * @todo    [feature] condition: custom `meta_query`
 	 * @todo    [feature] condition: stock <>= X
 	 */
-	function create_products_xml( $file_num ) {
-		// Memory limit
-		if ( 0 != ( $php_memory_limit = get_option( 'alg_products_xml_php_memory_limit', 0 ) ) ) {
-			ini_set( 'memory_limit', $php_memory_limit . 'M' );
-		}
-		// Time limit (will be used in loop)
-		$php_time_limit = get_option( 'alg_products_xml_php_time_limit', -1 );
-		// Switch language (WPML)
-		$current_lang = '';
-		if ( '' != ( $xml_lang = get_option( 'alg_products_xml_lang_' . $file_num, '' ) ) ) {
-			global $sitepress;
-			if ( $sitepress && is_object( $sitepress ) ) {
-				$current_lang = apply_filters( 'wpml_current_language', NULL );
-				if ( $current_lang == $xml_lang ) {
-					$current_lang = '';
-				} else {
-					if ( method_exists( $sitepress, 'switch_lang' ) ) {
-						$sitepress->switch_lang( $xml_lang );
-					} else {
-						$current_lang = '';
-					}
-				}
-			}
-		}
-		// Get options
-		$xml_header_template        = get_option( 'alg_products_xml_header_'          . $file_num, $this->get_default_template( 'header' ) );
-		$xml_footer_template        = get_option( 'alg_products_xml_footer_'          . $file_num, $this->get_default_template( 'footer' ) );
-		$xml_item_template          = get_option( 'alg_products_xml_item_'            . $file_num, $this->get_default_template( 'item' ) );
-		$sorting_orderby            = get_option( 'alg_products_xml_orderby_'         . $file_num, 'date' );
-		$sorting_order              = get_option( 'alg_products_xml_order_'           . $file_num, 'DESC' );
-		$products_in_ids            = get_option( 'alg_products_xml_products_incl_'   . $file_num, '' );
-		$products_ex_ids            = get_option( 'alg_products_xml_products_excl_'   . $file_num, '' );
-		$products_cats_in_ids       = get_option( 'alg_products_xml_cats_incl_'       . $file_num, '' );
-		$products_cats_ex_ids       = get_option( 'alg_products_xml_cats_excl_'       . $file_num, '' );
-		$products_tags_in_ids       = get_option( 'alg_products_xml_tags_incl_'       . $file_num, '' );
-		$products_tags_ex_ids       = get_option( 'alg_products_xml_tags_excl_'       . $file_num, '' );
-		$products_scope             = get_option( 'alg_products_xml_scope_'           . $file_num, 'all' );
-		$products_variable          = get_option( 'alg_products_xml_variable_'        . $file_num, 'variable_only' );
-		$offset                     = get_option( 'alg_products_xml_offset_'          . $file_num, 0 );
-		$total_products             = get_option( 'alg_products_xml_total_products_'  . $file_num, 0 );
-		// $query_post_type            = 'products_only';
-		$products_stock_status      = apply_filters( 'alg_wc_product_xml_feeds_values', array(), 'stock_status', $file_num );
-		$min_price                  = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'min_price', $file_num );
-		$max_price                  = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'max_price', $file_num );
-		$catalog_visibility         = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'catalog_visibility', $file_num );
-		$custom_taxonomy_in         = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'custom_taxonomy_in', $file_num );
-		$custom_taxonomy_in_slugs   = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'custom_taxonomy_in_slugs', $file_num );
-		$attribute_in               = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'attribute_in', $file_num );
-		$attribute_in_values        = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'attribute_in_values', $file_num );
-		$varPidsTaxQuey				= array();
-
-		// Handle "raw" input
-		if ( 'no' === get_option( 'alg_products_xml_raw_input', 'yes' ) ) {
-			$xml_header_template    = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_header_template );
-			$xml_footer_template    = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_footer_template );
-			$xml_item_template      = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_item_template );
-		}
-
-		// Get products and feed
-		$xml_items       = '';
-		$block_size      = get_option( 'alg_products_xml_query_block_size', 512 );
-		$_total_products = 0;
-		while ( true ) {
-			// Time limit
-			if ( -1 != $php_time_limit ) {
-				set_time_limit( $php_time_limit );
-			}
-			// Args
-			$args = array(
-				'post_type'      => ( 'variable_only' === $products_variable || 'products_only' === $query_post_type ? 'product' : array( 'product', 'product_variation' ) ),
-				'post_status'    => 'publish',
-				'posts_per_page' => $block_size,
-				'orderby'        => $sorting_orderby,
-				'order'          => $sorting_order,
-				'offset'         => $offset,
-			);
-			if ( 'all' != $products_scope ) {
-				$args['meta_query'] = WC()->query->get_meta_query();
-				switch ( $products_scope ) {
-					case 'sale_only':
-						$args['post__in']     = array_merge( array( 0 ), wc_get_product_ids_on_sale() );
-						break;
-					case 'not_sale_only':
-						$args['post__not_in'] = array_merge( array( 0 ), wc_get_product_ids_on_sale() );
-						break;
-					case 'featured_only':
-						$args['post__in']     = array_merge( array( 0 ), wc_get_featured_product_ids() );
-						break;
-					case 'not_featured_only':
-						$args['post__not_in'] = array_merge( array( 0 ), wc_get_featured_product_ids() );
-						break;
-				}
-			}
-			if ( ! empty( $products_stock_status ) ) {
-				if ( ! isset( $args['meta_query'] ) ) {
-					$args['meta_query'] = array();
-				} else {
-					$args['meta_query']['relation'] = 'AND';
-				}
-				$args['meta_query'][] = array(
-					'key'     => '_stock_status',
-					'value'   => $products_stock_status,
-					'compare' => 'IN',
-				);
-			}
-			if ( ! empty( $products_in_ids ) ) {
-				
-				if($products_variable=='variations_only')
-				{
-					$args['post_parent__in'] = $products_in_ids;
-				}
-				else
-				{
-					$args['post__in'] = $products_in_ids;	
-				}
-			}
-			if ( ! empty( $products_ex_ids ) ) {
-				$args['post__not_in'] = $products_ex_ids;
-			}
-			if ( ! empty( $products_cats_in_ids ) ) {
-				if ( ! isset( $args['tax_query'] ) ) {
-					$args['tax_query'] = array();
-				}
-				$args['tax_query'][] = array(
-					'taxonomy' => 'product_cat',
-					'field'    => 'term_id',
-					'terms'    => $products_cats_in_ids,
-					'operator' => 'IN',
-				);
-			}
-			if ( ! empty( $products_cats_ex_ids ) ) {
-				if ( ! isset( $args['tax_query'] ) ) {
-					$args['tax_query'] = array();
-				}
-				$args['tax_query'][] = array(
-					'taxonomy' => 'product_cat',
-					'field'    => 'term_id',
-					'terms'    => $products_cats_ex_ids,
-					'operator' => 'NOT IN',
-				);
-			}
-			if ( ! empty( $products_tags_in_ids ) ) {
-				if ( ! isset( $args['tax_query'] ) ) {
-					$args['tax_query'] = array();
-				}
-				$args['tax_query'][] = array(
-					'taxonomy' => 'product_tag',
-					'field'    => 'term_id',
-					'terms'    => $products_tags_in_ids,
-					'operator' => 'IN',
-				);
-			}
-			if ( ! empty( $products_tags_ex_ids ) ) {
-				if ( ! isset( $args['tax_query'] ) ) {
-					$args['tax_query'] = array();
-				}
-				$args['tax_query'][] = array(
-					'taxonomy' => 'product_tag',
-					'field'    => 'term_id',
-					'terms'    => $products_tags_ex_ids,
-					'operator' => 'NOT IN',
-				);
-			}
-			if ( ! empty( $custom_taxonomy_in ) && ! empty( $custom_taxonomy_in_slugs ) ) {
-				if ( ! isset( $args['tax_query'] ) ) {
-					$args['tax_query'] = array();
-				}
-				$args['tax_query'][] = array(
-					'taxonomy' => $custom_taxonomy_in,
-					'field'    => 'slug',
-					'terms'    => array_map( 'trim', explode( ',', $custom_taxonomy_in_slugs ) ),
-					'operator' => 'IN',
-				);
-			}
-			$loop = new WP_Query( $args );
-
-			if ( ! $loop->have_posts() ) {
-				break;
-			}
-			while ( $loop->have_posts() ) {
-				$loop->the_post();
-				$_product = wc_get_product( get_the_ID() );
-				// Additional product filtering
-				$do_add = true;
-				if (
-					( 'variations_only' === $products_variable ) ||
-					( '' !== $min_price || '' !== $max_price ) ||
-					( ! empty( $catalog_visibility ) ) ||
-					( '' != $attribute_in && '' != $attribute_in_values )
-				) {
-					// $_product = wc_get_product( get_the_ID() );
-					if ( '' !== $min_price || '' !== $max_price ) {
-						$_price = $_product->get_price();
-					}
-					// Filter
-					if (
-						( 'variations_only' === $products_variable && $_product->is_type( 'variable' ) ) ||
-						( ( '' !== $min_price && $_price < $min_price ) || ( '' !== $max_price && $_price > $max_price ) ) ||
-						( ! empty( $catalog_visibility ) && ! in_array( $_product->get_catalog_visibility(), $catalog_visibility ) ) ||
-						( '' != $attribute_in && '' != $attribute_in_values && ! in_array( $_product->get_attribute( $attribute_in ), $attribute_in_values ) )
-					) {
-						$do_add = false;
-					}
-					
-				}
-				
-				if( in_array($products_variable, array('variations_only','both')) && $_product->is_type( 'variable' ))
-					{
-						$varPidsTaxQuey[] = get_the_ID();
-					}
-				
-				if ( $do_add ) {
-					// Add product to XML feed
-					$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
-					$_total_products++;
-				}
-				
-				// Variations
-				if ( 'variable_only' != $products_variable && 'products_only' === $query_post_type ) {
-					$_product = wc_get_product( get_the_ID() );
-					if ( $_product->is_type( 'variable' ) ) {
-						global $post;
-						foreach ( $_product->get_children() as $child_id ) {
-							$post = get_post( $child_id );
-							setup_postdata( $post );
-							// Check variation's stock status
-							if (
-								! empty( $products_stock_status ) &&
-								'yes' === get_post_meta( $child_id, '_manage_stock', true ) &&
-								! in_array( get_post_meta( $child_id, '_stock_status', true ), $products_stock_status )
-							) {
-								continue;
-							}
-							// Check attribute
-							if (
-								'' != $attribute_in && '' != $attribute_in_values && ( $variation_product = wc_get_product( $child_id ) ) &&
-								! in_array( $variation_product->get_attribute( $attribute_in ), $attribute_in_values )
-							) {
-								continue;
-							}
-							// Add variation product to XML feed
-							$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
-							$_total_products++;
-						}
-						wp_reset_postdata();
-					}
-				}
-				if ( 0 != $total_products && $_total_products >= $total_products ) {
-					break;
-				}
-			}
-			$offset += $block_size;
-			if ( 0 != $total_products && $_total_products >= $total_products ) {
-				break;
-			}
-		}
-		
-		wp_reset_postdata();
-
-		if(count($varPidsTaxQuey) > 0 && ((isset($args['tax_query']) && !empty($args['tax_query'])) || ($products_variable=='both' && ! empty( $products_in_ids )) ) )
-		{
-			unset($args['post__in']);
-			unset($args['tax_query']);
-			$args['post_parent__in'] = $varPidsTaxQuey;
-			$args['posts_per_page'] = '-1';
-			$loop = new WP_Query( $args );
-			if ( $loop->have_posts() ) {
-				
-				while ( $loop->have_posts() ) {
-					$loop->the_post();
-					$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
-				}
-			}
-		}
-		wp_reset_postdata();
-
-
-		// Switch back language (WPML)
-		if ( '' != $current_lang ) {
-			$sitepress->switch_lang( $current_lang );
-		}
-		// Create XML feed file
-		if('yes'==get_option( 'alg_products_xml_use_home_url_' . $file_num, 'no' ))
-		{
-			$home_url = home_url();
-			$site_url = site_url();
-			if($home_url!=$site_url)
-			{
-				$compare = strcmp($site_url,$home_url);
-
-				if($compare > 0)
-				{
-					// $site_url long
-					
-					$extra = str_replace($home_url, '', $site_url);
-					$extra = ltrim($extra, '/');
-					$extra = rtrim($extra, '/');
-					$new_path = str_replace(DIRECTORY_SEPARATOR . $extra, '', ABSPATH);
-					$new_path = ltrim($new_path, '/');
-					$new_path = ltrim($new_path, '\\');
-					$new_path = rtrim($new_path, '\\');
-					$new_path = rtrim($new_path, '/') . DIRECTORY_SEPARATOR;
-					
-					return file_put_contents(
-						$new_path . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
-						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
-					);
-				}
-				else if($compare < 0)
-				{
-					// $home_url long
-					$extra = str_replace($site_url, '', $home_url);
-					$extra = ltrim($extra, '/');
-					$extra = rtrim($extra, '/');
-					$new_path = rtrim(ABSPATH, '/') . '/' . $extra . '/';
-					wp_mkdir_p($new_path);
-					return file_put_contents(
-						$new_path . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
-						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
-					);
-				}
-				else
-				{
-					return file_put_contents(
-						ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
-						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
-					);
-				}
-			}
-			else
-			{
-				return file_put_contents(
-					ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
-					do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
-				);
-			}
-		}
-		else
-		{
-			return file_put_contents(
-				ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
-				do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
-			);
-		}
-	}
+//	function create_products_xml( $file_num ) {
+//		// Memory limit
+//		if ( 0 != ( $php_memory_limit = get_option( 'alg_products_xml_php_memory_limit', 0 ) ) ) {
+//			ini_set( 'memory_limit', $php_memory_limit . 'M' );
+//		}
+//		// Time limit (will be used in loop)
+//		$php_time_limit = get_option( 'alg_products_xml_php_time_limit', -1 );
+//		// Switch language (WPML)
+//		$current_lang = '';
+//		if ( '' != ( $xml_lang = get_option( 'alg_products_xml_lang_' . $file_num, '' ) ) ) {
+//			global $sitepress;
+//			if ( $sitepress && is_object( $sitepress ) ) {
+//				$current_lang = apply_filters( 'wpml_current_language', NULL );
+//				if ( $current_lang == $xml_lang ) {
+//					$current_lang = '';
+//				} else {
+//					if ( method_exists( $sitepress, 'switch_lang' ) ) {
+//						$sitepress->switch_lang( $xml_lang );
+//					} else {
+//						$current_lang = '';
+//					}
+//				}
+//			}
+//		}
+//		// Get options
+//		$xml_header_template        = get_option( 'alg_products_xml_header_'          . $file_num, $this->get_default_template( 'header' ) );
+//		$xml_footer_template        = get_option( 'alg_products_xml_footer_'          . $file_num, $this->get_default_template( 'footer' ) );
+//		$xml_item_template          = get_option( 'alg_products_xml_item_'            . $file_num, $this->get_default_template( 'item' ) );
+//		$sorting_orderby            = get_option( 'alg_products_xml_orderby_'         . $file_num, 'date' );
+//		$sorting_order              = get_option( 'alg_products_xml_order_'           . $file_num, 'DESC' );
+//		$products_in_ids            = get_option( 'alg_products_xml_products_incl_'   . $file_num, '' );
+//		$products_ex_ids            = get_option( 'alg_products_xml_products_excl_'   . $file_num, '' );
+//		$products_cats_in_ids       = get_option( 'alg_products_xml_cats_incl_'       . $file_num, '' );
+//		$products_cats_ex_ids       = get_option( 'alg_products_xml_cats_excl_'       . $file_num, '' );
+//		$products_tags_in_ids       = get_option( 'alg_products_xml_tags_incl_'       . $file_num, '' );
+//		$products_tags_ex_ids       = get_option( 'alg_products_xml_tags_excl_'       . $file_num, '' );
+//		$products_scope             = get_option( 'alg_products_xml_scope_'           . $file_num, 'all' );
+//		$products_variable          = get_option( 'alg_products_xml_variable_'        . $file_num, 'variable_only' );
+//		$offset                     = get_option( 'alg_products_xml_offset_'          . $file_num, 0 );
+//		$total_products             = get_option( 'alg_products_xml_total_products_'  . $file_num, 0 );
+//		// $query_post_type            = 'products_only';
+//		$products_stock_status      = apply_filters( 'alg_wc_product_xml_feeds_values', array(), 'stock_status', $file_num );
+//		$min_price                  = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'min_price', $file_num );
+//		$max_price                  = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'max_price', $file_num );
+//		$catalog_visibility         = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'catalog_visibility', $file_num );
+//		$custom_taxonomy_in         = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'custom_taxonomy_in', $file_num );
+//		$custom_taxonomy_in_slugs   = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'custom_taxonomy_in_slugs', $file_num );
+//		$attribute_in               = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'attribute_in', $file_num );
+//		$attribute_in_values        = apply_filters( 'alg_wc_product_xml_feeds_values', '', 'attribute_in_values', $file_num );
+//		$varPidsTaxQuey				= array();
+//
+//		// Handle "raw" input
+//		if ( 'no' === get_option( 'alg_products_xml_raw_input', 'yes' ) ) {
+//			$xml_header_template    = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_header_template );
+//			$xml_footer_template    = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_footer_template );
+//			$xml_item_template      = str_replace( array( '{', '}' ), array( '<', '>' ), $xml_item_template );
+//		}
+//
+//		// Get products and feed
+//		$xml_items       = '';
+//		$block_size      = get_option( 'alg_products_xml_query_block_size', 512 );
+//		$_total_products = 0;
+//		while ( true ) {
+//			// Time limit
+//			if ( -1 != $php_time_limit ) {
+//				set_time_limit( $php_time_limit );
+//			}
+//			// Args
+//			$args = array(
+//				'post_type'      => ( 'variable_only' === $products_variable || 'products_only' === $query_post_type ? 'product' : array( 'product', 'product_variation' ) ),
+//				'post_status'    => 'publish',
+//				'posts_per_page' => $block_size,
+//				'orderby'        => $sorting_orderby,
+//				'order'          => $sorting_order,
+//				'offset'         => $offset,
+//			);
+//			if ( 'all' != $products_scope ) {
+//				$args['meta_query'] = WC()->query->get_meta_query();
+//				switch ( $products_scope ) {
+//					case 'sale_only':
+//						$args['post__in']     = array_merge( array( 0 ), wc_get_product_ids_on_sale() );
+//						break;
+//					case 'not_sale_only':
+//						$args['post__not_in'] = array_merge( array( 0 ), wc_get_product_ids_on_sale() );
+//						break;
+//					case 'featured_only':
+//						$args['post__in']     = array_merge( array( 0 ), wc_get_featured_product_ids() );
+//						break;
+//					case 'not_featured_only':
+//						$args['post__not_in'] = array_merge( array( 0 ), wc_get_featured_product_ids() );
+//						break;
+//				}
+//			}
+//			if ( ! empty( $products_stock_status ) ) {
+//				if ( ! isset( $args['meta_query'] ) ) {
+//					$args['meta_query'] = array();
+//				} else {
+//					$args['meta_query']['relation'] = 'AND';
+//				}
+//				$args['meta_query'][] = array(
+//					'key'     => '_stock_status',
+//					'value'   => $products_stock_status,
+//					'compare' => 'IN',
+//				);
+//			}
+//			if ( ! empty( $products_in_ids ) ) {
+//
+//				if($products_variable=='variations_only')
+//				{
+//					$args['post_parent__in'] = $products_in_ids;
+//				}
+//				else
+//				{
+//					$args['post__in'] = $products_in_ids;
+//				}
+//			}
+//			if ( ! empty( $products_ex_ids ) ) {
+//				$args['post__not_in'] = $products_ex_ids;
+//			}
+//			if ( ! empty( $products_cats_in_ids ) ) {
+//				if ( ! isset( $args['tax_query'] ) ) {
+//					$args['tax_query'] = array();
+//				}
+//				$args['tax_query'][] = array(
+//					'taxonomy' => 'product_cat',
+//					'field'    => 'term_id',
+//					'terms'    => $products_cats_in_ids,
+//					'operator' => 'IN',
+//				);
+//			}
+//			if ( ! empty( $products_cats_ex_ids ) ) {
+//				if ( ! isset( $args['tax_query'] ) ) {
+//					$args['tax_query'] = array();
+//				}
+//				$args['tax_query'][] = array(
+//					'taxonomy' => 'product_cat',
+//					'field'    => 'term_id',
+//					'terms'    => $products_cats_ex_ids,
+//					'operator' => 'NOT IN',
+//				);
+//			}
+//			if ( ! empty( $products_tags_in_ids ) ) {
+//				if ( ! isset( $args['tax_query'] ) ) {
+//					$args['tax_query'] = array();
+//				}
+//				$args['tax_query'][] = array(
+//					'taxonomy' => 'product_tag',
+//					'field'    => 'term_id',
+//					'terms'    => $products_tags_in_ids,
+//					'operator' => 'IN',
+//				);
+//			}
+//			if ( ! empty( $products_tags_ex_ids ) ) {
+//				if ( ! isset( $args['tax_query'] ) ) {
+//					$args['tax_query'] = array();
+//				}
+//				$args['tax_query'][] = array(
+//					'taxonomy' => 'product_tag',
+//					'field'    => 'term_id',
+//					'terms'    => $products_tags_ex_ids,
+//					'operator' => 'NOT IN',
+//				);
+//			}
+//			if ( ! empty( $custom_taxonomy_in ) && ! empty( $custom_taxonomy_in_slugs ) ) {
+//				if ( ! isset( $args['tax_query'] ) ) {
+//					$args['tax_query'] = array();
+//				}
+//				$args['tax_query'][] = array(
+//					'taxonomy' => $custom_taxonomy_in,
+//					'field'    => 'slug',
+//					'terms'    => array_map( 'trim', explode( ',', $custom_taxonomy_in_slugs ) ),
+//					'operator' => 'IN',
+//				);
+//			}
+//			$loop = new WP_Query( $args );
+//
+//			if ( ! $loop->have_posts() ) {
+//				break;
+//			}
+//			while ( $loop->have_posts() ) {
+//				$loop->the_post();
+//				$_product = wc_get_product( get_the_ID() );
+//				// Additional product filtering
+//				$do_add = true;
+//				if (
+//					( 'variations_only' === $products_variable ) ||
+//					( '' !== $min_price || '' !== $max_price ) ||
+//					( ! empty( $catalog_visibility ) ) ||
+//					( '' != $attribute_in && '' != $attribute_in_values )
+//				) {
+//					// $_product = wc_get_product( get_the_ID() );
+//					if ( '' !== $min_price || '' !== $max_price ) {
+//						$_price = $_product->get_price();
+//					}
+//					// Filter
+//					if (
+//						( 'variations_only' === $products_variable && $_product->is_type( 'variable' ) ) ||
+//						( ( '' !== $min_price && $_price < $min_price ) || ( '' !== $max_price && $_price > $max_price ) ) ||
+//						( ! empty( $catalog_visibility ) && ! in_array( $_product->get_catalog_visibility(), $catalog_visibility ) ) ||
+//						( '' != $attribute_in && '' != $attribute_in_values && ! in_array( $_product->get_attribute( $attribute_in ), $attribute_in_values ) )
+//					) {
+//						$do_add = false;
+//					}
+//
+//				}
+//
+//				if( in_array($products_variable, array('variations_only','both')) && $_product->is_type( 'variable' ))
+//					{
+//						$varPidsTaxQuey[] = get_the_ID();
+//					}
+//
+//				if ( $do_add ) {
+//					// Add product to XML feed
+//					$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
+//					$_total_products++;
+//				}
+//
+//				// Variations
+//				if ( 'variable_only' != $products_variable && 'products_only' === $query_post_type ) {
+//					$_product = wc_get_product( get_the_ID() );
+//					if ( $_product->is_type( 'variable' ) ) {
+//						global $post;
+//						foreach ( $_product->get_children() as $child_id ) {
+//							$post = get_post( $child_id );
+//							setup_postdata( $post );
+//							// Check variation's stock status
+//							if (
+//								! empty( $products_stock_status ) &&
+//								'yes' === get_post_meta( $child_id, '_manage_stock', true ) &&
+//								! in_array( get_post_meta( $child_id, '_stock_status', true ), $products_stock_status )
+//							) {
+//								continue;
+//							}
+//							// Check attribute
+//							if (
+//								'' != $attribute_in && '' != $attribute_in_values && ( $variation_product = wc_get_product( $child_id ) ) &&
+//								! in_array( $variation_product->get_attribute( $attribute_in ), $attribute_in_values )
+//							) {
+//								continue;
+//							}
+//							// Add variation product to XML feed
+//							$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
+//							$_total_products++;
+//						}
+//						wp_reset_postdata();
+//					}
+//				}
+//				if ( 0 != $total_products && $_total_products >= $total_products ) {
+//					break;
+//				}
+//			}
+//			$offset += $block_size;
+//			if ( 0 != $total_products && $_total_products >= $total_products ) {
+//				break;
+//			}
+//		}
+//
+//		wp_reset_postdata();
+//
+//		if(count($varPidsTaxQuey) > 0 && ((isset($args['tax_query']) && !empty($args['tax_query'])) || ($products_variable=='both' && ! empty( $products_in_ids )) ) )
+//		{
+//			unset($args['post__in']);
+//			unset($args['tax_query']);
+//			$args['post_parent__in'] = $varPidsTaxQuey;
+//			$args['posts_per_page'] = '-1';
+//			$loop = new WP_Query( $args );
+//			if ( $loop->have_posts() ) {
+//
+//				while ( $loop->have_posts() ) {
+//					$loop->the_post();
+//					$xml_items .= str_replace( '&', '&amp;', html_entity_decode( do_shortcode( $xml_item_template ) ) );
+//				}
+//			}
+//		}
+//		wp_reset_postdata();
+//
+//
+//		// Switch back language (WPML)
+//		if ( '' != $current_lang ) {
+//			$sitepress->switch_lang( $current_lang );
+//		}
+//		// Create XML feed file
+//		if('yes'==get_option( 'alg_products_xml_use_home_url_' . $file_num, 'no' ))
+//		{
+//			$home_url = home_url();
+//			$site_url = site_url();
+//			if($home_url!=$site_url)
+//			{
+//				$compare = strcmp($site_url,$home_url);
+//
+//				if($compare > 0)
+//				{
+//					// $site_url long
+//
+//					$extra = str_replace($home_url, '', $site_url);
+//					$extra = ltrim($extra, '/');
+//					$extra = rtrim($extra, '/');
+//					$new_path = str_replace(DIRECTORY_SEPARATOR . $extra, '', ABSPATH);
+//					$new_path = ltrim($new_path, '/');
+//					$new_path = ltrim($new_path, '\\');
+//					$new_path = rtrim($new_path, '\\');
+//					$new_path = rtrim($new_path, '/') . DIRECTORY_SEPARATOR;
+//
+//					return file_put_contents(
+//						$new_path . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
+//						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
+//					);
+//				}
+//				else if($compare < 0)
+//				{
+//					// $home_url long
+//					$extra = str_replace($site_url, '', $home_url);
+//					$extra = ltrim($extra, '/');
+//					$extra = rtrim($extra, '/');
+//					$new_path = rtrim(ABSPATH, '/') . '/' . $extra . '/';
+//					wp_mkdir_p($new_path);
+//					return file_put_contents(
+//						$new_path . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
+//						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
+//					);
+//				}
+//				else
+//				{
+//					return file_put_contents(
+//						ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
+//						do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
+//					);
+//				}
+//			}
+//			else
+//			{
+//				return file_put_contents(
+//					ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
+//					do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
+//				);
+//			}
+//		}
+//		else
+//		{
+//			return file_put_contents(
+//				ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) ),
+//				do_shortcode( $xml_header_template ) . $xml_items . do_shortcode( $xml_footer_template )
+//			);
+//		}
+//	}
 
 }
 

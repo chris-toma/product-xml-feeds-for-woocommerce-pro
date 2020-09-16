@@ -197,13 +197,13 @@ class Alg_WC_Product_XML_Feeds_Core {
                 MAX(CASE WHEN pm1.meta_key = '_sku' then pm1.meta_value ELSE NULL END) as sku,
                 MAX(CASE WHEN pm1.meta_key = '_stock' then pm1.meta_value ELSE NULL END) as stock,
                 am.meta_value as image
-            FROM wp_posts p
-                LEFT JOIN wp_postmeta pm1 ON pm1.post_id = p.ID
-                LEFT JOIN wp_term_relationships AS tr ON tr.object_id = p.ID
-                JOIN wp_term_taxonomy AS tt ON tt.taxonomy = 'product_cat' AND tt.term_taxonomy_id = tr.term_taxonomy_id
-                JOIN wp_terms AS t ON t.term_id = tt.term_id
-                LEFT JOIN wp_postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_thumbnail_id'
-                LEFT JOIN wp_postmeta am ON am.post_id = pm.meta_value AND am.meta_key = '_wp_attached_file'
+            FROM {$wpdb->prefix}posts p
+                LEFT JOIN {$wpdb->prefix}postmeta pm1 ON pm1.post_id = p.ID
+                LEFT JOIN {$wpdb->prefix}term_relationships AS tr ON tr.object_id = p.ID
+                JOIN {$wpdb->prefix}term_taxonomy AS tt ON tt.taxonomy = 'product_cat' AND tt.term_taxonomy_id = tr.term_taxonomy_id
+                JOIN {$wpdb->prefix}terms AS t ON t.term_id = tt.term_id
+                LEFT JOIN {$wpdb->prefix}postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_thumbnail_id'
+                LEFT JOIN {$wpdb->prefix}postmeta am ON am.post_id = pm.meta_value AND am.meta_key = '_wp_attached_file'
             WHERE p.post_type in('product', 'product_variation') AND p.post_status = 'publish'
             GROUP BY p.ID;";
 
@@ -218,9 +218,9 @@ class Alg_WC_Product_XML_Feeds_Core {
             $a = $wpdb->get_results("
                     SELECT taxonomy, slug
                     FROM
-                        wp_term_relationships
-                            JOIN wp_term_taxonomy wtt ON wp_term_relationships.term_taxonomy_id = wtt.term_taxonomy_id
-                            JOIN wp_terms wt ON wtt.term_id = wt.term_id
+                        {$wpdb->prefix}term_relationships tr
+                            JOIN {$wpdb->prefix}term_taxonomy wtt ON tr.term_taxonomy_id = wtt.term_taxonomy_id
+                            JOIN {$wpdb->prefix}terms wt ON wtt.term_id = wt.term_id
                     WHERE object_id = {$row->ID}");
             $f=[];
             foreach ($a as $attr){

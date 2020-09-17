@@ -181,6 +181,7 @@ class Alg_WC_Product_XML_Feeds_Core {
 
     function create_products_xml($file_num)
     {
+//        $start = microtime(true);
         global $wpdb;
         $sql = "
             SELECT
@@ -191,7 +192,7 @@ class Alg_WC_Product_XML_Feeds_Core {
                 t.term_id AS product_id,
                 tt.term_taxonomy_id AS tt_term_taxonomia,
                 tr.term_taxonomy_id AS tr_term_taxonomia,
-                MAX(CASE WHEN pm1.meta_key = '_price' then pm1.meta_value ELSE NULL END) as price,
+                MAX(IF(pm1.meta_key = '_price', pm1.meta_value, NULL)) as price,
                 MAX(CASE WHEN pm1.meta_key = '_regular_price' then pm1.meta_value ELSE NULL END) as regular_price,
                 MAX(CASE WHEN pm1.meta_key = '_sale_price' then pm1.meta_value ELSE NULL END) as sale_price,
                 MAX(CASE WHEN pm1.meta_key = '_sku' then pm1.meta_value ELSE NULL END) as sku,
@@ -207,13 +208,15 @@ class Alg_WC_Product_XML_Feeds_Core {
             WHERE p.post_type in('product', 'product_variation') AND p.post_status = 'publish'
             GROUP BY p.ID;";
 
-        $start = microtime(true);
+        $path = ABSPATH . get_option( 'alg_products_xml_file_path_' . $file_num, ( ( 1 == $file_num ) ? 'products.xml' : 'products_' . $file_num . '.xml' ) );
+        $file   = fopen($path, "w");
         $a = $wpdb->get_results($sql);
-        $xml = "";
-        $xml .= '<?xml version = "1.0" encoding = "utf-8" ?>' . PHP_EOL .
+
+        $xml = '<?xml version = "1.0" encoding = "utf-8" ?>' . PHP_EOL .
             '<root>' . PHP_EOL .
-            '<time>[alg_current_datetime]</time>' . PHP_EOL .
             '<title><![CDATA[ Products Feed ]]></title>' . PHP_EOL;
+        fwrite($file, $xml, strlen($xml));
+
         foreach ($a as $row) {
             $a = $wpdb->get_results("
                     SELECT taxonomy, slug
@@ -222,15 +225,15 @@ class Alg_WC_Product_XML_Feeds_Core {
                             JOIN {$wpdb->prefix}term_taxonomy wtt ON tr.term_taxonomy_id = wtt.term_taxonomy_id
                             JOIN {$wpdb->prefix}terms wt ON wtt.term_id = wt.term_id
                     WHERE object_id = {$row->ID}");
+
             $f=[];
             foreach ($a as $attr){
                 $f[] =$attr->taxonomy.":".$attr->slug;
             }
 
-            print "<pre>";
             $f = implode('|',$f);
 
-            $xml .= '<item>' . PHP_EOL .
+            $xml = '<item>' . PHP_EOL .
                 "\t" . '<name>' . $row->post_title . '</name>' . PHP_EOL .
                 "\t" . '<short_description>' . htmlspecialchars($row->post_content) . '</short_description>' . PHP_EOL .
                 "\t" . '<price>' . $row->price . '</price>' . PHP_EOL .
@@ -241,13 +244,13 @@ class Alg_WC_Product_XML_Feeds_Core {
                 "\t" . '<attributes>' . $f . '</attributes>' . PHP_EOL .
                 '</item>' . PHP_EOL;
 
-        }
-        $end = microtime(true);
-        $xml .= '</root>' . $start . " " . $end;
+            fwrite($file, $xml, strlen($xml));
 
-        file_put_contents('products.xml', $xml);
-        print $end - $start . PHP_EOL;
-        die();
+        }
+//        $end = microtime(true);
+        $xml = '</root>';
+        fwrite($file, $xml, strlen($xml));
+        fclose($file);
     }
 	/**
 	 * create_products_xml.
